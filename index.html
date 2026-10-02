@@ -353,8 +353,18 @@ function GardenRig(THREE, G, O){
       if (a.visible){
         a.updateMatrixWorld(true);
         a.matrixWorld.decompose(this._p, this._q, this._s);
-        /* follow the tracker 1:1 — any extra smoothing here reads as lag when the rug is turned */
-        this.stage.position.copy(this._p); this.stage.quaternion.copy(this._q); this.stage.scale.copy(this._s); this.snap = false;
+        /* adaptive smoothing: tiny jitter (rug held still) is damped hard, real motion is followed almost 1:1 */
+        if (this.snap || !this.stage.visible){
+          this.stage.position.copy(this._p); this.stage.quaternion.copy(this._q); this.stage.scale.copy(this._s); this.snap = false;
+        } else {
+          var size = this._s.x || 1;
+          var dp = this.stage.position.distanceTo(this._p)/size;           /* in rug widths */
+          var dr = this.stage.quaternion.angleTo(this._q);                   /* radians */
+          var motion = Math.max(dp/0.03, dr/0.06);                            /* 1 = clearly moving */
+          var k = Math.min(1, Math.max(0.06, motion*motion));
+          var f = 1 - Math.pow(1 - k, Math.min(3, (dt || 16)/16.7));          /* frame-rate independent */
+          this.stage.position.lerp(this._p, f); this.stage.quaternion.slerp(this._q, f); this.stage.scale.lerp(this._s, f);
+        }
         this.stage.visible = true; this.seen = this.t;
       } else if (this.t - this.seen > 0.8 && this.stage.visible){
         this.stage.visible = false; document.getElementById('hint').style.display = 'block';
@@ -372,7 +382,7 @@ function GardenRig(THREE, G, O){
     document.getElementById('intro').remove();
     document.getElementById('hint').style.display = 'block';
     var w = document.createElement('div');
-    w.innerHTML = '<a-scene mindar-image="imageTargetSrc: ' + mindURL + '; filterMinCF: 0.001; filterBeta: 200; missTolerance: 10; warmupTolerance: 2; uiScanning: no; uiLoading: no" color-space="sRGB" ' +
+    w.innerHTML = '<a-scene mindar-image="imageTargetSrc: ' + mindURL + '; filterMinCF: 0.0001; filterBeta: 1000; missTolerance: 10; warmupTolerance: 2; uiScanning: no; uiLoading: no" color-space="sRGB" ' +
       'renderer="colorManagement: true; antialias: false; alpha: true; maxCanvasWidth: 1280; maxCanvasHeight: 1280" vr-mode-ui="enabled: false" device-orientation-permission-ui="enabled: false" loading-screen="enabled: false">' +
       '<a-camera position="0 0 0" look-controls="enabled: false"></a-camera>' +
       '<a-entity mindar-image-target="targetIndex: 0" garden></a-entity></a-scene>';
