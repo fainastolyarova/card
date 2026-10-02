@@ -48,7 +48,7 @@ function GardenRig(THREE, G, O){
       if (o.isMesh){
         o.frustumCulled = false;
         var conv = function(m){
-          if (m.map){ m.map.magFilter = THREE.NearestFilter; m.map.minFilter = THREE.NearestFilter; m.map.generateMipmaps = false; m.map.needsUpdate = true; }
+          if (m.map){ m.map.magFilter = THREE.NearestFilter; m.map.minFilter = THREE.LinearMipmapLinearFilter; m.map.generateMipmaps = true; m.map.anisotropy = 4; m.map.needsUpdate = true; }
           /* half self-lit, half shaded: the pixel colours survive any lighting (no blow-out, no black) */
           var n = new THREE.MeshLambertMaterial({map:m.map || null, color:m.color.clone().multiplyScalar(0.55), emissive:m.map ? 0xffffff : m.color.clone(),
             emissiveMap:m.map || null, emissiveIntensity:0.5, side:THREE.DoubleSide, alphaTest:m.alphaTest || 0, transparent:false, flatShading:!!m.flatShading});
@@ -287,7 +287,7 @@ function GardenRig(THREE, G, O){
   /* square pixel rug under everybody */
   if (O.rug){
     var rt = new THREE.TextureLoader().load(O.rug);
-    rt.magFilter = rt.minFilter = THREE.NearestFilter; rt.generateMipmaps = false;
+    rt.magFilter = THREE.NearestFilter; rt.minFilter = THREE.LinearMipmapLinearFilter; rt.generateMipmaps = true; rt.anisotropy = 8;
     if (parseInt(THREE.REVISION, 10) >= 152) rt.colorSpace = THREE.SRGBColorSpace; else rt.encoding = THREE.sRGBEncoding;
     root.updateMatrixWorld(true);
     var bb = new THREE.Box3().setFromObject(root), cc = bb.getCenter(new THREE.Vector3());
@@ -353,18 +353,42 @@ function GardenRig(THREE, G, O){
       if (a.visible){
         a.updateMatrixWorld(true);
         a.matrixWorld.decompose(this._p, this._q, this._s);
-        /* adaptive smoothing: tiny jitter (rug held still) is damped hard, real motion is followed almost 1:1 */
-        if (this.snap || !this.stage.visible){
-          this.stage.position.copy(this._p); this.stage.quaternion.copy(this._q); this.stage.scale.copy(this._s); this.snap = false;
-        } else {
-          var size = this._s.x || 1;
-          var dp = this.stage.position.distanceTo(this._p)/size;           /* in rug widths */
-          var dr = this.stage.quaternion.angleTo(this._q);                   /* radians */
-          var motion = Math.max(dp/0.03, dr/0.06);                            /* 1 = clearly moving */
-          var k = Math.min(1, Math.max(0.06, motion*motion));
-          var f = 1 - Math.pow(1 - k, Math.min(3, (dt || 16)/16.7));          /* frame-rate independent */
-          this.stage.position.lerp(this._p, f); this.stage.quaternion.slerp(this._q, f); this.stage.scale.lerp(this._s, f);
+        /* Steady mode. Raw poses go into a short rolling buffer and are averaged.
+           While the rug is still, the scene is FROZEN: it only glides to the average when the average
+           has really drifted (dead zone). Clear, sustained motion switches to follow mode. */
+        var dtn = Math.min(3, (dt || 16)/16.7);
+        var ease = function(k){ return 1 - Math.pow(1 - k, dtn); };
+        var S = this;
+        if (!S.buf) S.buf = [];
+        if (S.snap || !S.stage.visible){
+          S.buf.length = 0; S.moveFrames = 0; S.mode = 'still';
+          S.dPos = S._p.clone(); S.dQuat = S._q.clone();
+          S.stage.scale.copy(S._s); S.snap = false;
         }
+        S.buf.push({p:S._p.clone(), q:S._q.clone()});
+        var N = S.mode === 'move' ? 4 : 24;
+        while (S.buf.length > N) S.buf.shift();
+        var ap = new THREE.Vector3(), aq = new THREE.Quaternion(0, 0, 0, 0), q0 = S.buf[0].q;
+        S.buf.forEach(function(b){
+          ap.add(b.p);
+          var s = (b.q.x*q0.x + b.q.y*q0.y + b.q.z*q0.z + b.q.w*q0.w) < 0 ? -1 : 1;   /* keep quaternions on one side */
+          aq.x += s*b.q.x; aq.y += s*b.q.y; aq.z += s*b.q.z; aq.w += s*b.q.w;
+        });
+        ap.multiplyScalar(1/S.buf.length); aq.normalize();
+        var size = S._s.x || 1, dist = ap.length() || 1;
+        var rawSide = S.dPos.clone().normalize().angleTo(S._p.clone().normalize())*dist/size;
+        var rawRot = S.dQuat.angleTo(S._q), rawDepth = Math.abs(S._p.length() - S.dPos.length())/size;
+        S.moveFrames = (rawSide > 0.15 || rawRot > 0.22 || rawDepth > 0.5) ? S.moveFrames + 1 : 0;
+        if (S.moveFrames >= 3) S.mode = 'move';
+        var avSide = S.dPos.clone().normalize().angleTo(ap.clone().normalize())*dist/size;
+        var avRot = S.dQuat.angleTo(aq), avDepth = Math.abs(ap.length() - S.dPos.length())/size;
+        if (S.mode === 'move'){
+          S.dPos.lerp(ap, ease(0.5)); S.dQuat.slerp(aq, ease(0.5));
+          if (avSide < 0.04 && avRot < 0.05 && avDepth < 0.08 && S.moveFrames === 0) S.mode = 'still';
+        } else if (avSide > 0.03 || avRot > 0.04 || avDepth > 0.15){
+          S.dPos.lerp(ap, ease(0.06)); S.dQuat.slerp(aq, ease(0.06));      /* slow glide to the new rest pose */
+        }                                                                    /* else: frozen */
+        S.stage.position.copy(S.dPos); S.stage.quaternion.copy(S.dQuat); S.stage.scale.copy(S._s);
         this.stage.visible = true; this.seen = this.t;
       } else if (this.t - this.seen > 0.8 && this.stage.visible){
         this.stage.visible = false; document.getElementById('hint').style.display = 'block';
@@ -382,8 +406,8 @@ function GardenRig(THREE, G, O){
     document.getElementById('intro').remove();
     document.getElementById('hint').style.display = 'block';
     var w = document.createElement('div');
-    w.innerHTML = '<a-scene mindar-image="imageTargetSrc: ' + mindURL + '; filterMinCF: 0.0001; filterBeta: 1000; missTolerance: 10; warmupTolerance: 2; uiScanning: no; uiLoading: no" color-space="sRGB" ' +
-      'renderer="colorManagement: true; antialias: false; alpha: true; maxCanvasWidth: 1280; maxCanvasHeight: 1280" vr-mode-ui="enabled: false" device-orientation-permission-ui="enabled: false" loading-screen="enabled: false">' +
+    w.innerHTML = '<a-scene mindar-image="imageTargetSrc: ' + mindURL + '; filterMinCF: 0.0001; filterBeta: 0.01; missTolerance: 10; warmupTolerance: 2; uiScanning: no; uiLoading: no" color-space="sRGB" ' +
+      'renderer="colorManagement: true; antialias: true; alpha: true; maxCanvasWidth: 1280; maxCanvasHeight: 1280" vr-mode-ui="enabled: false" device-orientation-permission-ui="enabled: false" loading-screen="enabled: false">' +
       '<a-camera position="0 0 0" look-controls="enabled: false"></a-camera>' +
       '<a-entity mindar-image-target="targetIndex: 0" garden></a-entity></a-scene>';
     document.body.appendChild(w.firstChild);
