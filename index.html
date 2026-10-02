@@ -329,6 +329,7 @@ function GardenRig(THREE, G, O){
       this.t = 0; this.start = -1; this.lost = -99; this.seen = -99;
       /* the scene lives in a "stage" that follows the rug smoothly and stays put for a moment
          when tracking drops (steep angles, fast moves), instead of blinking out */
+      var r = this.el.sceneEl.renderer; if (r) r.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));   /* frees the phone for tracking */
       var stage = this.stage = new THREE.Group(); stage.visible = false;
       this.el.sceneEl.object3D.add(stage);
       this._p = new THREE.Vector3(); this._q = new THREE.Quaternion(); this._s = new THREE.Vector3();
@@ -352,10 +353,10 @@ function GardenRig(THREE, G, O){
       if (a.visible){
         a.updateMatrixWorld(true);
         a.matrixWorld.decompose(this._p, this._q, this._s);
-        if (this.snap || !this.stage.visible){ this.stage.position.copy(this._p); this.stage.quaternion.copy(this._q); this.stage.scale.copy(this._s); this.snap = false; }
-        else { this.stage.position.lerp(this._p, 0.55); this.stage.quaternion.slerp(this._q, 0.55); this.stage.scale.lerp(this._s, 0.55); }
+        /* follow the tracker 1:1 — any extra smoothing here reads as lag when the rug is turned */
+        this.stage.position.copy(this._p); this.stage.quaternion.copy(this._q); this.stage.scale.copy(this._s); this.snap = false;
         this.stage.visible = true; this.seen = this.t;
-      } else if (this.t - this.seen > 1.5 && this.stage.visible){
+      } else if (this.t - this.seen > 0.8 && this.stage.visible){
         this.stage.visible = false; document.getElementById('hint').style.display = 'block';
       }
       if (this.start < 0) return;
@@ -371,8 +372,8 @@ function GardenRig(THREE, G, O){
     document.getElementById('intro').remove();
     document.getElementById('hint').style.display = 'block';
     var w = document.createElement('div');
-    w.innerHTML = '<a-scene mindar-image="imageTargetSrc: ' + mindURL + '; filterMinCF: 0.0001; filterBeta: 0.001; missTolerance: 15; warmupTolerance: 3; uiScanning: no; uiLoading: no" color-space="sRGB" ' +
-      'renderer="colorManagement: true; antialias: true; alpha: true" vr-mode-ui="enabled: false" device-orientation-permission-ui="enabled: false" loading-screen="enabled: false">' +
+    w.innerHTML = '<a-scene mindar-image="imageTargetSrc: ' + mindURL + '; filterMinCF: 0.001; filterBeta: 200; missTolerance: 10; warmupTolerance: 2; uiScanning: no; uiLoading: no" color-space="sRGB" ' +
+      'renderer="colorManagement: true; antialias: false; alpha: true; maxCanvasWidth: 1280; maxCanvasHeight: 1280" vr-mode-ui="enabled: false" device-orientation-permission-ui="enabled: false" loading-screen="enabled: false">' +
       '<a-camera position="0 0 0" look-controls="enabled: false"></a-camera>' +
       '<a-entity mindar-image-target="targetIndex: 0" garden></a-entity></a-scene>';
     document.body.appendChild(w.firstChild);
